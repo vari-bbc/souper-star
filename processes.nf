@@ -1,5 +1,5 @@
 process sam_to_bam {
-    container "${params.container__samtools}"
+    label "samtools"
     label "cpu_large"
     tag "${sam}"
     
@@ -16,7 +16,7 @@ process sam_to_bam {
 }
 
 process filter_reads {
-    container "${params.container__misc}"
+    label 'filter'
     label "cpu_large"
     tag "${bam}"
 
@@ -33,7 +33,7 @@ process filter_reads {
 }
 
 process add_tags {
-    container "${params.container__misc}"
+    label 'tags'
     label "io_limited"
     tag "${bam}"
 
@@ -53,7 +53,7 @@ process add_tags {
 }
 
 process merge_sample {
-    container "${params.container__samtools}"
+    label 'samtools'
     label "cpu_large"
     tag "${sample}"
 
@@ -70,7 +70,7 @@ process merge_sample {
 }
 
 process dedup {
-    container "${params.container__samtools}"
+    label 'samtools'
     label "cpu_large"
     tag "${bam}"
     publishDir "${params.results}/dedup/", mode: 'copy', overwrite: true, pattern: "*.dup.out"
@@ -93,7 +93,7 @@ samtools sort -n -m 2G -@ ${task.cpus} "${bam}" \
 }
 
 process index {
-    container "${params.container__samtools}"
+    label 'samtools'
     label "cpu_large"
     tag "${sample}"
 
@@ -111,7 +111,7 @@ samtools index "${bam}"
 
 process make_bed {
     publishDir "${params.results}/beds/", mode: 'copy', overwrite: true
-    container "${params.container__misc}"
+    label 'sam_perl'
     label "io_limited"
     tag "${sample}"
 
@@ -128,7 +128,7 @@ make_bed.sh "${bam}" > "${sample}.bed.gz"
 }
 
 process merge_all {
-    container "${params.container__samtools}"
+    label 'samtools'
     label "cpu_large"
 
     input:
@@ -146,7 +146,7 @@ samtools index merged.bam
 }
 
 process get_barcodes {
-    container "${params.container__misc}"
+    label 'sam_perl'
     label "io_limited"
     tag "${bam}"
 
@@ -163,7 +163,7 @@ get_barcodes.sh "${bam}" > "${bam.name.replaceAll(/.bam$/, '')}.barcodes.tsv.gz"
 }
 
 process join_barcodes {
-    container "${params.container__misc}"
+    label 'tags'
     label "io_limited"
 
     input:
@@ -180,7 +180,7 @@ cat input/*.barcodes.tsv.gz > barcodes.tsv.gz
 
 process souporcell {
     publishDir "${params.results}", mode: 'copy', overwrite: true
-    container "${params.container__souporcell}"
+    label 'souporcell'
     label "cpu_large"
 
     input:
@@ -231,22 +231,4 @@ process summarize {
 
     script:
     template "summarize.py"
-}
-
-process archr {
-    publishDir "${params.results}/", mode: 'copy', overwrite: true
-    container "${params.container__archr}"
-    label "io_limited"
-
-    input:
-        path "beds/"
-        path "souporcell/"
-
-    output:
-        path "ArchR/*"
-
-    """#!/bin/bash
-set -e
-apply_ArchR.R
-    """
 }
