@@ -18,6 +18,7 @@ print(f"Read in {barcode_counts.shape[0]:,} barcode readcounts")
 barcode_counts = barcode_counts.groupby('barcode').head(1)
 
 sample_assignments = pd.read_csv("sample_manifest.csv", header=None, names=["sample", "index"])
+sample_assignments = sample_assignments.drop_duplicates(subset=["index"])
 print(f"Read in {sample_assignments.shape[0]:,} sample assignments")
 
 # Assign the source sample from each cluster
@@ -72,7 +73,7 @@ def run_pca_and_save(df, output_prefix):
             plt.close()
 
     # Write out to CSV
-    print(f"Writing out to {output_prefix}.csv.gz")
-    output_df.to_csv(f"{output_prefix}.csv.gz", index=None)
+    print(f"Writing out to {output_prefix}.csv")
+    output_df.to_csv(f"{output_prefix}.csv", index=None)
 
 run_pca_and_save(clusters, "souporcell.clusters.all")

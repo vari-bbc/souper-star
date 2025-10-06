@@ -39,6 +39,7 @@ process add_tags {
 
     input:
         tuple val(sample), path(bam), val(ix)
+        path well_barcode
 
     output:
         tuple val(sample), path("${bam.name.replaceAll(/.bam$/, '')}.tagged.bam")
@@ -46,7 +47,7 @@ process add_tags {
     script:
     """
     echo Adding tag ${ix} to ${bam}
-    add_tags.py -i ${ix} "${bam}"\
+    add_tags.py -i ${ix} -b ${well_barcode} "${bam}"  \
     | samtools view -b - \
     > "${bam.name.replaceAll(/.bam$/, '')}.tagged.bam"
     """

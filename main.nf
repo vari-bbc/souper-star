@@ -18,7 +18,6 @@ CONTAINERS
 samtools         : $params.container__samtools
 souporcell       : $params.container__souporcell
 misc             : $params.container__misc
-archr            : $params.container__archr
 
 """
 
@@ -36,7 +35,6 @@ include {
     join_barcodes;
     souporcell;
     summarize;
-    archr;
 } from './processes.nf'
 
 workflow {
@@ -62,13 +60,18 @@ workflow {
                 file(
                     "${it[params.path_col]}",
                     checkIfExists: true
-                )
+                ),
+                "${it[params.sample_index]}"
             ]
         }
         .toSortedList()
         .map { it -> [it, (1..it.size).toList()] }
         .transpose()
-        .map { it -> [it[0][0], it[0][1], it[1]]}
+        .map { it -> [it[0][0], it[0][1], it[0][2]]}
+        .map { rec ->
+    println "[DEBUG flatten→branch] record = ${rec}"
+    rec   // must return the tuple unchanged for downstream
+}
         .branch {
             bam: it[1].name.endsWith(".bam")
             sam: true
@@ -87,8 +90,14 @@ workflow {
     // Remove duplicates
     dedup(bam_ch)
 
+    // Well barcode file
+    well_barcode = file(
+        "${params.well_barcode}",
+        checkIfExist: true
+    )
+
     // Add unique tags for each input file
-    add_tags(dedup.out[0])
+    add_tags(dedup.out[0], well_barcode)
 
     // If the user specified a minimum number of reads per barcode
     if ( "${params.min_reads}" != "0" ){
@@ -144,6 +153,8 @@ workflow {
         checkIfExists: true
     )
 
+
+
     // Run souporcell
     souporcell(
         merge_all.out,
@@ -152,17 +163,7 @@ workflow {
         genome_index
     )
 
-     // Run archR
-    archr(
-        make_bed
-            .out
-            .map { it -> it[1] }
-            .toSortedList(),
-        souporcell.out
-    )
-
-   // Post-process the souporcell outputs
-    summarize(
+   summarize(
         souporcell.out,
         join_barcodes.out,
         bam_ch
