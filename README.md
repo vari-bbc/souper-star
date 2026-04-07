@@ -1,147 +1,128 @@
-# souper-star
-Nextflow workflow running souporcell on barcoded cell subsets
+# Souporcell Doublet Calling Pipeline
 
-## Workflow
+This repository contains a Nextflow pipeline for Souporcell-based doublet calling from aligned single-cell CUT&Tag / ATAC-like BAM files.
 
-The analysis workflow performs the following steps:
+The pipeline covers:
 
-  1. Convert SAM to BAM (if necessary)
-  2. Remove duplicate reads
-  3. Add unique tags for each input file
-  4. Filter cells by a minimum read threshold (if specified)
-  5. Extract the barcodes observed in each filtered set of alignments
-  6. Merge alignments by sample
-  7. Create BED files for each sample
-  8. Run souporcell to classify each cell by genotype
-  9. Summarize outputs with ArchR
+- FASTA indexing with `samtools faidx`
+- `CB`/`CR` cell barcode tag and `RG` read-group tag insertion using a C++ stream filter
+- barcode-aware PCR duplicate removal with `samtools markdup --barcode-tag CB`
+- BAM merging, sorting, and indexing
+- Souporcell doublet calling
 
-## Input Data
+To run the pipeline, it needs to provide a plain-text barcode file with one bare barcode per line, for example:
 
-To run souper-star, the user must provide a set of aligned reads in BAM (or SAM) format
-as well as the nucleotide sequence of the reference genome in FASTA format.
-While alignments in SAM format are supported, the following documentation will
-refer to BAM when indicating a file which could be provided as either BAM or SAM.
-Multiple BAM files from the same sample can be provided using a sample sheet
-CSV to indicate which BAM files correspond to which sample.
-
-### Sample Sheet
-
-The sample sheet listing the location of all input files must have a column
-listing the path to each BAM file as well as a column indicating the sample
-for that BAM.
-
-Example:
-
-```bash
-sample,path
-SampleA,/path/to/batch1/SampleA.bam
-SampleA,/path/to/batch2/SampleA.bam
-SampleB,/path/to/batch1/SampleB.bam
-SampleB,/path/to/batch2/SampleB.bam
+```text
+AAACGAAAGGTT
+AAACGAACCTGA
 ```
 
-## Running the Workflow
+## Files
 
-### Nextflow
+- `main.nf`: Nextflow DSL2 workflow.
+- `nextflow.config`: local, Conda, Singularity, and SLURM profile settings.
+- `bin/add_cb_rg_tags`: wrapper that prefers the compiled tagger and builds it if needed.
+- `src/add_cb_rg_tags.cpp`: fast C++ SAM stream filter that adds `CB:Z`, `CR:Z`, and `RG:Z` tags.
+- `tools/build_add_cb_rg_tags.sh`: explicit build helper for the C++ tagger.
+- `envs/souporcell.yml`: Conda environment definition.
+- `containers/souporcell.def`: Singularity/Apptainer definition file.
+- `METHODS.md`: extended workflow notes.
 
-The workflow can be run using the Nextflow workflow management system, which can be
-set up following [their user documentation](https://nextflow.io/).
+## Minimal Run
 
-### Containers
+```bash
+nextflow run main.nf \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda
+```
 
-The software used in each step of the workflow has been provided via Docker containers
-which are specified in the workflow.
-Those software containers can be used either via Docker ([installation instructions](https://docs.docker.com/get-docker/))
-or Singularity ([installation instructions](https://docs.sylabs.io/guides/latest/user-guide/)).
-Singularity is typically used on HPC systems which do not allow users the root
-access needed for running Docker.
+For SLURM with Conda:
 
-After either Docker or Singularity, Nextflow must be configured to use either
-system as appropriate.
-The most convenient way to set up this configuration is to create a file called
-`nextflow.config` which follows [the configuration instructions for Nextflow](https://www.nextflow.io/docs/latest/config.html).
-It is also possible to set up other types of job execution systems (e.g. AWS,
-Google Cloud, Azure, SLURM, PBS) which can be managed directly by Nextflow.
-This configuration file can be used across multiple runs of the workflow on
-the same computational system.
+```bash
+nextflow run main.nf \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda,slurm
+```
 
-### Parameters
+Use a non-default BAM filename pattern with:
 
-For each individual run, a file with the parameters for each run should be
-created [in JSON format](https://www.w3schools.com/js/js_json_intro.asp),
-typically called `params.json`.
-The required parameters for the workflow are:
+```bash
+--bam_glob "*.bam"
+```
 
- - `samplesheet`: Path to the sample sheet CSV [described above](#sample-sheet)
- - `genome_fasta`: Path to the genome FASTA used for alignment
- - `k`: Number of genotypes used
- - `min_reads`: Minimum threshold of reads per barcode (cell)
+## Barcode Extraction
 
- ### Launching the Workflow
+The C++ tagger reads SAM from `stdin`, writes SAM to `stdout`, and extracts a barcode from each read name.
 
- Once all of the previous steps have been completed, the workflow can be
- launched with a command like:
+Default mode:
 
- ```bash
- nextflow run FredHutch/souper-star -params-file params.json -c nextflow.config
- ```
+```bash
+--extract_mode regex --qname_regex '([ACGTN]+(?:-[0-9]+)?)$'
+```
 
- ## Quickstart (with the BASH Workbench)
+Useful alternatives:
 
- To more easily set up and launch the workflow, users may take advantage of
- a command-line utility called the [BASH Workbench](https://github.com/FredHutch/bash-workbench/wiki).
- This utility can be installed directly with the command `pip3 install bash-workbench`.
- After installation, the BASH Workbench can be launched interactively with the command
- `wb`.
- 
- > Users of the Fred Hutch computing cluster can launch the workbench directly
- > via `wb` without the need for any installation.
+```bash
+# Use the fifth colon-delimited field, matching the original Python example's parts[4].
+--extract_mode colon --colon_field 5
 
- ### Setup
+# Use the substring before the first underscore.
+--extract_mode underscore
 
- To set up this workflow in the BASH Workbench, select:
- 
- - Select `Manage Repositories`;
- - Select `Download New Repository`;
- - then enter `FredHutch/souper-star` and confirm
+# Use the last colon-delimited field if present, otherwise substring before underscore.
+--extract_mode auto
+```
 
- After setting up the workflow, the workbench can be exited with Control+C.
+If the barcode should be suffixed, for example `AAAC...-1`, add:
 
- ### Launching the Workflow
+```bash
+--index_suffix 1
+```
 
- After setting up the workflow, it can be run by:
+If BAMs already have correct `CB` tags and read groups, skip tag insertion:
 
- - Navigating to the folder intended for the output files;
- - Launching the BASH Workbench (`wb`);
- - Select `Run Tool`;
- - Select `FredHutch_souper-star`;
- - Select `souper-star`;
- - Enter [the appropriate parameters](#parameters);
- - Select `Review and Run`;
- - Select `FredHutch_souper-star`;
- - Select `slurm` (if using an HPC SLURM cluster) or `docker` (for local execution);
- - Enter any needed parameters for the SLURM or Docker configuration. For example, SLURM users will need to enter the `scratch_dir` parameter using a folder on the scratch filesystem which can be used for temporary files;
- - Select `Review and Run`;
- - Select `Run Now`
+```bash
+--skip_add_tags true
+```
 
- Once the workflow has been launched, a record will be saved of the parameters
- used for execution, as well as all of the logs which were produced during
- execution.
+## Outputs
 
- ## Output Files
+Outputs are published under `--out_dir`:
 
- The output files produced by the workflow include:
+- `bin/add_cb_rg_tags`: compiled C++ tagger.
+- `ref/`: FASTA index generated by `samtools faidx`.
+- `tagged_bams/*.rg.bam`: BAMs with `CB`, `CR`, and `RG` tags.
+- `dedup_bams/*.dedup.bam`: barcode-aware duplicate-removed BAMs.
+- `dedup_bams/*.dup.out`: `samtools markdup` duplicate metrics.
+- `merged_bam/merged.sorted.bam`: merged, sorted BAM.
+- `merged_bam/merged.sorted.bam.bai`: BAM index.
+- `souporcell_output/`: Souporcell results, including `clusters.tsv`.
 
- ```bash
- beds/                           # Alignments in BED format for each sample
- dedup/                          # Deduplication log files for each sample
- sample_manifest.csv             # Table indicating the index used for each sample
- souporcell/                     # Results from souporcell
- souporcell.clusters.all.csv.gz  # Table listing soupercell assignments for each cell
- souporcell.clusters.all.pdf     # Summary figures with QC metrics
- ```
+## Dependencies
 
-## Authors
+Use `-profile conda` or provide these tools on `PATH`:
 
-Analysis code was written by Jacob Greene (jgreene3 at fredhutch dot org).
-Workflow code was written by Samuel Minot (sminot at fredhutch dot org).
+- Nextflow
+- `g++` with C++17 support
+- `samtools`
+- `souporcell_pipeline.py`
+
+Build the C++ tagger manually if desired:
+
+```bash
+./tools/build_add_cb_rg_tags.sh
+```
+
+## Notes
+
+- The barcode list must match the `CB` tags generated from the BAM read names.
+- If Souporcell reports many missing barcodes, rerun with a different `--extract_mode` or `--qname_regex`.
+- This workflow uses `--no_umi true`, `--skip_remap true`, and `--ignore true` by default for aligned CUT&Tag / ATAC-like BAMs.

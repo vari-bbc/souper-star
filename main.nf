@@ -1,157 +1,173 @@
-// Enable DSL 2 syntax
 nextflow.enable.dsl = 2
 
-log.info """\
-S O U P E R - S T A R
-==========================================
-samplesheet      : $params.samplesheet
-samplesheet_sep  : $params.samplesheet_sep
-umi_len          : $params.umi_len
-min_reads        : $params.min_reads
-genome_fasta     : $params.genome_fasta
-k                : $params.k
-flags            : $params.flags
-results          : $params.results
+params.input_dir = params.input_dir ?: null
+params.bam_glob = params.bam_glob ?: '*.bam'
+params.out_dir = params.out_dir ?: 'souporcell_work'
+params.barcode_list = params.barcode_list ?: null
+params.ref_fasta = params.ref_fasta ?: null
+params.k_genotypes = params.k_genotypes ?: 4
+params.extract_mode = params.extract_mode ?: 'regex'
+params.qname_regex = params.qname_regex ?: '([ACGTN]+(?:-[0-9]+)?)$'
+params.colon_field = params.colon_field ?: 5
+params.index_suffix = params.index_suffix ?: ''
+params.skip_add_tags = params.skip_add_tags ?: false
+params.no_umi = params.no_umi == null ? true : params.no_umi
+params.skip_remap = params.skip_remap == null ? true : params.skip_remap
+params.ignore = params.ignore == null ? true : params.ignore
+params.souporcell_extra_args = params.souporcell_extra_args ?: ''
+params.publish_mode = params.publish_mode ?: 'copy'
 
-CONTAINERS
-=========================================
-samtools         : $params.container__samtools
-souporcell       : $params.container__souporcell
-misc             : $params.container__misc
-archr            : $params.container__archr
+if (!params.input_dir) {
+    error "Missing required parameter: --input_dir"
+}
 
-"""
+if (!params.barcode_list) {
+    error "Missing required parameter: --barcode_list"
+}
 
-// Import processes
-include { 
-    sam_to_bam;
-    add_tags;
-    filter_reads;
-    merge_sample;
-    dedup;
-    index;
-    make_bed;
-    merge_all;
-    get_barcodes;
-    join_barcodes;
-    souporcell;
-    summarize;
-    archr;
-} from './processes.nf'
+if (!params.ref_fasta) {
+    error "Missing required parameter: --ref_fasta"
+}
+
+process PREPARE_FASTA {
+    tag "${ref_fasta}"
+    cpus 4
+    memory '16 GB'
+    publishDir "${params.out_dir}/ref", mode: params.publish_mode
+
+    input:
+    path ref_fasta
+
+    output:
+    tuple path(ref_fasta), path("${ref_fasta}.fai"), emit: indexed_fasta
+
+    script:
+    """
+    samtools faidx "${ref_fasta}"
+    """
+}
+
+process ADD_CB_RG_TAGS {
+    tag "${sample}"
+    cpus 8
+    memory '32 GB'
+    publishDir "${params.out_dir}/tagged_bams", mode: params.publish_mode
+
+    input:
+    tuple val(sample), path(bam)
+
+    output:
+    tuple val(sample), path("${sample}.rg.bam")
+
+    script:
+    def index_arg = params.index_suffix ? "--index \"${params.index_suffix}\"" : ''
+    """
+    samtools view -h -@ ${task.cpus} "${bam}" \\
+      | add_cb_rg_tags \\
+          --sample "${sample}" \\
+          --mode "${params.extract_mode}" \\
+          --regex '${params.qname_regex}' \\
+          --colon-field ${params.colon_field} \\
+          ${index_arg} \\
+      | samtools view -b -@ ${task.cpus} -o "${sample}.rg.bam" -
+    """
+}
+
+process DEDUP_BAM {
+    tag "${sample}"
+    cpus 16
+    memory '96 GB'
+    publishDir "${params.out_dir}/dedup_bams", mode: params.publish_mode
+
+    input:
+    tuple val(sample), path(rg_bam)
+
+    output:
+    tuple val(sample), path("${sample}.dedup.bam"), path("${sample}.dup.out"), emit: dedup_bam
+
+    script:
+    """
+    samtools sort -n -m 4G -@ ${task.cpus} "${rg_bam}" \\
+      | samtools fixmate -m -@ ${task.cpus} - - \\
+      | samtools sort -m 2G -@ ${task.cpus} - \\
+      | samtools markdup -r -s \\
+          -f "${sample}.dup.out" \\
+          --barcode-tag CB \\
+          -@ ${task.cpus} \\
+          - "${sample}.dedup.bam"
+    """
+}
+
+process MERGE_BAMS {
+    cpus 16
+    memory '96 GB'
+    publishDir "${params.out_dir}/merged_bam", mode: params.publish_mode
+
+    input:
+    path dedup_bams
+
+    output:
+    tuple path('merged.sorted.bam'), path('merged.sorted.bam.bai'), emit: merged_bam
+
+    script:
+    """
+    samtools merge -@ ${task.cpus} -f merged.bam *.dedup.bam
+    samtools sort -m 4G -@ ${task.cpus} -o merged.sorted.bam merged.bam
+    samtools index -@ ${task.cpus} merged.sorted.bam
+    """
+}
+
+process RUN_SOUPORCELL {
+    cpus 16
+    memory '128 GB'
+    time '24h'
+    publishDir "${params.out_dir}", mode: params.publish_mode
+
+    input:
+    tuple path(merged_bam), path(merged_bai)
+    path barcode_list
+    tuple path(ref_fasta), path(ref_fai)
+
+    output:
+    path 'souporcell_output', emit: souporcell_output
+
+    script:
+    """
+    mkdir -p souporcell_output
+    souporcell_pipeline.py \\
+      -i "${merged_bam}" \\
+      -b "${barcode_list}" \\
+      -f "${ref_fasta}" \\
+      -t ${task.cpus} \\
+      -k ${params.k_genotypes} \\
+      --no_umi ${params.no_umi} \\
+      --skip_remap ${params.skip_remap} \\
+      --ignore ${params.ignore} \\
+      -o souporcell_output \\
+      ${params.souporcell_extra_args}
+    """
+}
 
 workflow {
-
-    if ( "${params.results}" == "false" ){error "Must provide parameter: results"}
-    if ( "${params.samplesheet}" == "false" ){error "Must provide parameter: samplesheet"}
-    if ( "${params.genome_fasta}" == "false" ){error "Must provide parameter: genome_fasta"}
-
-    // Get the input BAM/SAM files from the samplesheet
     Channel
-        .fromPath(
-            "${params.samplesheet}",
-            checkIfExists: true
-        )
-        .splitCsv(
-            header: true,
-            sep: params.samplesheet_sep,
-            strip: true
-        )
-        .map {
-            it -> [
-                "${it[params.sample_col]}",
-                file(
-                    "${it[params.path_col]}",
-                    checkIfExists: true
-                )
-            ]
-        }
-        .toSortedList()
-        .map { it -> [it, (1..it.size).toList()] }
-        .transpose()
-        .map { it -> [it[0][0], it[0][1], it[1]]}
-        .branch {
-            bam: it[1].name.endsWith(".bam")
-            sam: true
-        }
-        .set { input }
-
-    // SAM -> BAM
-    sam_to_bam(input.sam)
-
-    // Define channel of BAM inputs
-    sam_to_bam
-        .out
-        .mix(input.bam)
+        .fromPath("${params.input_dir}/${params.bam_glob}", checkIfExists: true)
+        .map { bam -> tuple(bam.baseName, bam) }
         .set { bam_ch }
 
-    // Remove duplicates
-    dedup(bam_ch)
+    barcode_ch = Channel.fromPath(params.barcode_list, checkIfExists: true)
+    ref_ch = Channel.fromPath(params.ref_fasta, checkIfExists: true)
 
-    // Add unique tags for each input file
-    add_tags(dedup.out[0])
+    PREPARE_FASTA(ref_ch)
 
-    // If the user specified a minimum number of reads per barcode
-    if ( "${params.min_reads}" != "0" ){
-        filter_reads(add_tags.out)
-        
-        filter_reads.out.set { to_be_merged }
+    tagged_bams = params.skip_add_tags ? bam_ch : (bam_ch | ADD_CB_RG_TAGS)
+    deduped_bams = tagged_bams | DEDUP_BAM
+    deduped_bams
+        .map { sample, dedup_bam, dup_metrics -> dedup_bam }
+        .collect()
+        .set { dedup_bams_ch }
 
-    } else {
-        add_tags.out.set { to_be_merged }
-    }
+    MERGE_BAMS(dedup_bams_ch)
+    RUN_SOUPORCELL(MERGE_BAMS.out.merged_bam, barcode_ch, PREPARE_FASTA.out.indexed_fasta)
 
-    // Get the barcodes used for each BAM
-    get_barcodes(to_be_merged)
-    
-    // Merge together all of those barcode lists
-    join_barcodes(get_barcodes.out.toSortedList())
-
-    // Merge
-    merge_sample(
-        to_be_merged
-            .groupTuple(
-                sort: true
-            )
-    )
-
-    // Index the BAM
-    index(merge_sample.out)
-
-    // Make a channel containing:
-    //    tuple val(sample), path(bam), path(bai)
-    merge_sample.out.join(index.out).set { indexed_bam }
-
-    // Make a BED file from the BAM with its index
-    make_bed(indexed_bam)
-
-    // Merge the sample-level BAMs together
-    merge_all(
-        indexed_bam
-            .map { it -> [it[1], it[2]] }
-            .flatten()
-            .toSortedList()
-    )
-
-    // Make sure that the genome FASTA exists
-    genome = file(
-        "${params.genome_fasta}",
-        checkIfExists: true
-    )
-
-    // Make sure that the genome index exists
-    genome_index = file(
-        "${params.genome_fasta}.fai",
-        checkIfExists: true
-    )
-
-    // Run souporcell
-    souporcell(
-        merge_all.out,
-        join_barcodes.out,
-        genome,
-        genome_index
-    )
-
-
-
+    RUN_SOUPORCELL.out.souporcell_output.view { out -> "Completed Souporcell: ${out}" }
 }

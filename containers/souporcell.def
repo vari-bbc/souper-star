@@ -1,0 +1,16 @@
+Bootstrap: docker
+From: condaforge/miniforge3:latest
+
+%files
+    ../envs/souporcell.yml /tmp/souporcell.yml
+
+%post
+    set -e
+    mamba env create -f /tmp/souporcell.yml
+    mamba clean -afy
+
+%environment
+    export PATH=/opt/conda/envs/cocnt-souporcell/bin:$PATH
+
+%runscript
+    exec "$@"

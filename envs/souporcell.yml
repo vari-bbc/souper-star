@@ -1,0 +1,9 @@
+name: cocnt-souporcell
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - gxx_linux-64
+  - samtools=1.20
+  - souporcell
