@@ -19,6 +19,9 @@ params.min_ref = params.min_ref ?: 10
 params.max_loci = params.max_loci ?: 2048
 params.restarts = params.restarts ?: 100
 params.allow_troublet_failure = params.allow_troublet_failure ?: false
+params.allow_souporcell_partial = params.allow_souporcell_partial ?: false
+params.clean_souporcell_output = params.clean_souporcell_output == null ? true : params.clean_souporcell_output
+params.souporcell_cmd = params.souporcell_cmd ?: 'souporcell_pipeline.py'
 params.souporcell_extra_args = params.souporcell_extra_args ?: ''
 params.publish_mode = params.publish_mode ?: 'copy'
 
@@ -141,10 +144,15 @@ process RUN_SOUPORCELL {
     def skip_remap_arg = params.skip_remap.toString().toBoolean() ? '--skip_remap True' : ''
     def ignore_arg = params.ignore.toString().toBoolean() ? '--ignore True' : ''
     def allow_troublet_failure = params.allow_troublet_failure.toString().toBoolean() ? 'true' : 'false'
+    def allow_souporcell_partial = params.allow_souporcell_partial.toString().toBoolean() ? 'true' : 'false'
+    def clean_souporcell_output = params.clean_souporcell_output.toString().toBoolean() ? 'true' : 'false'
     """
+    if [[ "${clean_souporcell_output}" == "true" ]]; then
+      rm -rf souporcell_output
+    fi
     mkdir -p souporcell_output
     set +e
-    souporcell_pipeline.py \\
+    ${params.souporcell_cmd} \\
       -i "${merged_bam}" \\
       -b "${barcode_list}" \\
       -f "${ref_fasta}" \\
@@ -164,11 +172,17 @@ process RUN_SOUPORCELL {
     if [[ "\$status" -ne 0 ]]; then
       echo "souporcell_pipeline.py failed with exit status \$status" >&2
       echo "Inspecting Souporcell internal logs:" >&2
-      for log in souporcell_output/logs/*.err; do
+      for log in souporcell_output/logs/*.err souporcell_output/logs/*.log souporcell_output/logs/*.out souporcell_output/*.err souporcell_output/*.log; do
         [[ -e "\$log" ]] || continue
         echo "===== \$log =====" >&2
         tail -n 80 "\$log" >&2 || true
       done
+
+      if [[ "${allow_souporcell_partial}" == "true" && -s souporcell_output/clusters.tsv ]]; then
+        echo "WARNING: souporcell_pipeline.py failed after writing clusters.tsv; accepting partial output because --allow_souporcell_partial true." >&2
+        touch souporcell_output/souporcell.partial.allowed
+        exit 0
+      fi
 
       if [[ "${allow_troublet_failure}" == "true" && -s souporcell_output/clusters_tmp.tsv ]]; then
         echo "WARNING: troublet/doublet detection failed; keeping clusters_tmp.tsv as clusters.tsv because --allow_troublet_failure true." >&2

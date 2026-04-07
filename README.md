@@ -1,6 +1,6 @@
 # Souporcell Doublet Calling Pipeline
 
-This repository contains a Nextflow pipeline for Souporcell-based doublet calling from aligned single-cell CUT&Tag / ATAC-like BAM files.
+This repository contains a Nextflow pipeline for Souporcell-based doublet calling from aligned single-cell coCUT&Tag BAM files.
 
 The pipeline covers:
 
@@ -11,11 +11,6 @@ The pipeline covers:
 - Souporcell doublet calling
 
 To run the pipeline, it needs to provide a plain-text barcode file with one bare barcode per line, for example:
-
-```text
-AAACGAAAGGTT
-AAACGAACCTGA
-```
 
 ## Files
 
@@ -52,6 +47,12 @@ nextflow run main.nf \
   -profile conda,slurm
 ```
 
+If you are not using the Nextflow Conda profile and already have a named Conda environment, run Souporcell exactly like the original shell workflow:
+
+```bash
+--souporcell_cmd 'conda run -n souporcell souporcell_pipeline.py'
+```
+
 Use a non-default BAM filename pattern with:
 
 ```bash
@@ -71,14 +72,29 @@ Default mode:
 Useful alternatives:
 
 ```bash
-# Use the fifth colon-delimited field, matching the original Python example's parts[4].
---extract_mode colon --colon_field 5
+# Use the last colon-delimited field if present, otherwise substring before underscore.
+# For read names like:
+# 2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11
+# this extracts TAGGCATG_ATCCAGGA_G11.
+--extract_mode auto
+
+# Use a specific colon-delimited field. The field number is 1-based.
+# For the read-name example above, the barcode is field 6.
+--extract_mode colon --colon_field 6
 
 # Use the substring before the first underscore.
 --extract_mode underscore
+```
 
-# Use the last colon-delimited field if present, otherwise substring before underscore.
---extract_mode auto
+If you use `--colon_field 5` for the example above, the generated tag will be `CB:Z:1543`, which is the fifth read-name field, not the barcode suffix. The barcode list supplied to Souporcell must match the generated `CB` tags.
+
+If you change `--extract_mode` or `--colon_field`, do not reuse an old cached `ADD_CB_RG_TAGS` result. Either run without `-resume`, use a fresh `work/` directory, or delete the old downstream output before rechecking tags.
+
+Quick check:
+
+```bash
+samtools view results/merged_bam/merged.sorted.bam | awk '{for (i=12;i<=NF;i++) if ($i ~ /^CB:Z:/) {sub(/^CB:Z:/,"",$i); print $i; break}}' | head
+head ./data/cell_barcode.tsv
 ```
 
 If the barcode should be suffixed, for example `AAAC...-1`, add:
@@ -108,6 +124,20 @@ If Souporcell finishes clustering but `troublet` fails during doublet detection,
 ```
 
 This keeps `souporcell_output/clusters_tmp.tsv` as `souporcell_output/clusters.tsv` and writes `souporcell_output/troublet.failed.allowed`. Use this only as a clustering-only fallback; it does not produce validated doublet calls.
+
+If Souporcell writes `souporcell_output/clusters.tsv` but exits nonzero during a later consensus or ambient-RNA step, accept that partial output with:
+
+```bash
+--allow_souporcell_partial true
+```
+
+This writes `souporcell_output/souporcell.partial.allowed`. Use this only when `clusters.tsv` is the output you need and you accept that later files such as `ambient_rna.txt` or `cluster_genotypes.vcf` may be incomplete or missing.
+
+By default, each `RUN_SOUPORCELL` task removes any pre-existing `souporcell_output` directory inside the Nextflow work directory before starting. This avoids Souporcell's own partial-output restart mode producing different behavior from Nextflow `-resume`. To preserve Souporcell's internal restart behavior instead:
+
+```bash
+--clean_souporcell_output false
+```
 
 ## Outputs
 
