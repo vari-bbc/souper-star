@@ -14,6 +14,11 @@ params.skip_add_tags = params.skip_add_tags ?: false
 params.no_umi = params.no_umi == null ? true : params.no_umi
 params.skip_remap = params.skip_remap == null ? true : params.skip_remap
 params.ignore = params.ignore == null ? true : params.ignore
+params.min_alt = params.min_alt ?: 10
+params.min_ref = params.min_ref ?: 10
+params.max_loci = params.max_loci ?: 2048
+params.restarts = params.restarts ?: 100
+params.allow_troublet_failure = params.allow_troublet_failure ?: false
 params.souporcell_extra_args = params.souporcell_extra_args ?: ''
 params.publish_mode = params.publish_mode ?: 'copy'
 
@@ -132,19 +137,48 @@ process RUN_SOUPORCELL {
     path 'souporcell_output', emit: souporcell_output
 
     script:
+    def no_umi_arg = params.no_umi.toString().toBoolean() ? 'True' : 'False'
+    def skip_remap_arg = params.skip_remap.toString().toBoolean() ? '--skip_remap True' : ''
+    def ignore_arg = params.ignore.toString().toBoolean() ? '--ignore True' : ''
+    def allow_troublet_failure = params.allow_troublet_failure.toString().toBoolean() ? 'true' : 'false'
     """
     mkdir -p souporcell_output
+    set +e
     souporcell_pipeline.py \\
       -i "${merged_bam}" \\
       -b "${barcode_list}" \\
       -f "${ref_fasta}" \\
       -t ${task.cpus} \\
       -k ${params.k_genotypes} \\
-      --no_umi ${params.no_umi} \\
-      --skip_remap ${params.skip_remap} \\
-      --ignore ${params.ignore} \\
-      -o souporcell_output \\
-      ${params.souporcell_extra_args}
+      --no_umi ${no_umi_arg} \\
+      ${skip_remap_arg} \\
+      ${ignore_arg} \\
+      --min_alt ${params.min_alt} \\
+      --min_ref ${params.min_ref} \\
+      --max_loci ${params.max_loci} \\
+      --restarts ${params.restarts} \\
+      -o souporcell_output ${params.souporcell_extra_args}
+    status=\$?
+    set -e
+
+    if [[ "\$status" -ne 0 ]]; then
+      echo "souporcell_pipeline.py failed with exit status \$status" >&2
+      echo "Inspecting Souporcell internal logs:" >&2
+      for log in souporcell_output/logs/*.err; do
+        [[ -e "\$log" ]] || continue
+        echo "===== \$log =====" >&2
+        tail -n 80 "\$log" >&2 || true
+      done
+
+      if [[ "${allow_troublet_failure}" == "true" && -s souporcell_output/clusters_tmp.tsv ]]; then
+        echo "WARNING: troublet/doublet detection failed; keeping clusters_tmp.tsv as clusters.tsv because --allow_troublet_failure true." >&2
+        cp souporcell_output/clusters_tmp.tsv souporcell_output/clusters.tsv
+        touch souporcell_output/troublet.failed.allowed
+        exit 0
+      fi
+
+      exit "\$status"
+    fi
     """
 }
 

@@ -19,3 +19,7 @@ Default barcode extraction uses a regex against each read name:
 ```
 
 If read names encode barcodes differently, use `--extract_mode colon`, `--extract_mode underscore`, `--extract_mode auto`, or override `--qname_regex`.
+
+For sparse CUT&Tag / ATAC-like data, the default Souporcell thresholds `--min_alt 10 --min_ref 10` may be too strict. The workflow exposes these as `--min_alt` and `--min_ref`.
+
+If Souporcell clustering completes but `troublet` fails during doublet detection, `--allow_troublet_failure true` can be used to keep `clusters_tmp.tsv` as a clustering-only `clusters.tsv`. This fallback does not provide reliable doublet status calls.

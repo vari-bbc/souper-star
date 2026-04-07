@@ -93,6 +93,22 @@ If BAMs already have correct `CB` tags and read groups, skip tag insertion:
 --skip_add_tags true
 ```
 
+## Sparse CUT&Tag / ATAC Runs
+
+For sparse test data or low-depth CUT&Tag / ATAC-like data, Souporcell's default locus thresholds can be too strict. Try lower thresholds:
+
+```bash
+--min_alt 2 --min_ref 2
+```
+
+If Souporcell finishes clustering but `troublet` fails during doublet detection, rerun with:
+
+```bash
+--allow_troublet_failure true
+```
+
+This keeps `souporcell_output/clusters_tmp.tsv` as `souporcell_output/clusters.tsv` and writes `souporcell_output/troublet.failed.allowed`. Use this only as a clustering-only fallback; it does not produce validated doublet calls.
+
 ## Outputs
 
 Outputs are published under `--out_dir`:
