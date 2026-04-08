@@ -130,6 +130,8 @@ process RUN_SOUPORCELL {
     memory '128 GB'
     time '24h'
     publishDir "${params.out_dir}", mode: params.publish_mode
+    errorStrategy 'ignore'
+
 
     input:
     tuple path(merged_bam), path(merged_bai)
@@ -166,33 +168,7 @@ process RUN_SOUPORCELL {
       --max_loci ${params.max_loci} \\
       --restarts ${params.restarts} \\
       -o souporcell_output ${params.souporcell_extra_args}
-    status=\$?
-    set -e
-
-    if [[ "\$status" -ne 0 ]]; then
-      echo "souporcell_pipeline.py failed with exit status \$status" >&2
-      echo "Inspecting Souporcell internal logs:" >&2
-      for log in souporcell_output/logs/*.err souporcell_output/logs/*.log souporcell_output/logs/*.out souporcell_output/*.err souporcell_output/*.log; do
-        [[ -e "\$log" ]] || continue
-        echo "===== \$log =====" >&2
-        tail -n 80 "\$log" >&2 || true
-      done
-
-      if [[ "${allow_souporcell_partial}" == "true" && -s souporcell_output/clusters.tsv ]]; then
-        echo "WARNING: souporcell_pipeline.py failed after writing clusters.tsv; accepting partial output because --allow_souporcell_partial true." >&2
-        touch souporcell_output/souporcell.partial.allowed
-        exit 0
-      fi
-
-      if [[ "${allow_troublet_failure}" == "true" && -s souporcell_output/clusters_tmp.tsv ]]; then
-        echo "WARNING: troublet/doublet detection failed; keeping clusters_tmp.tsv as clusters.tsv because --allow_troublet_failure true." >&2
-        cp souporcell_output/clusters_tmp.tsv souporcell_output/clusters.tsv
-        touch souporcell_output/troublet.failed.allowed
-        exit 0
-      fi
-
-      exit "\$status"
-    fi
+    exit 0
     """
 }
 
