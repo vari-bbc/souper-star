@@ -9,6 +9,7 @@ params.k_genotypes = params.k_genotypes ?: 4
 params.extract_mode = params.extract_mode ?: 'regex'
 params.qname_regex = params.qname_regex ?: '([ACGTN]+(?:-[0-9]+)?)$'
 params.colon_field = params.colon_field ?: 5
+params.tail_length = params.tail_length ?: 0
 params.index_suffix = params.index_suffix ?: ''
 params.skip_add_tags = params.skip_add_tags ?: false
 params.no_umi = params.no_umi == null ? true : params.no_umi
@@ -72,10 +73,10 @@ process ADD_CB_RG_TAGS {
     """
     samtools view -h -@ ${task.cpus} "${bam}" \\
       | add_cb_rg_tags \\
-          --sample "${sample}" \\
           --mode "${params.extract_mode}" \\
           --regex '${params.qname_regex}' \\
           --colon-field ${params.colon_field} \\
+          --tail-length ${params.tail_length} \\
           ${index_arg} \\
       | samtools view -b -@ ${task.cpus} -o "${sample}.rg.bam" -
     """

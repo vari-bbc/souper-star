@@ -8,12 +8,11 @@
 #include <vector>
 
 struct Options {
-    std::string sample = "sample";
     std::string mode = "regex";
     std::string pattern = "([ACGTN]+(?:-[0-9]+)?)$";
     std::string index_suffix;
     int colon_field = 5;
-    bool add_rg = true;
+    int tail_length = 0;
 };
 
 static std::vector<std::string> split(const std::string& s, char delim) {
@@ -56,6 +55,14 @@ static std::string extract_barcode(const std::string& qname, const Options& opt)
             auto pos = qname.find('_');
             barcode = pos == std::string::npos ? qname : qname.substr(0, pos);
         }
+    } else if (opt.mode == "tail") {
+        if (opt.tail_length <= 0) {
+            throw std::runtime_error("tail-length must be > 0 in tail mode");
+        }
+        if (static_cast<size_t>(opt.tail_length) > qname.size()) {
+            throw std::runtime_error("tail-length is longer than read name: " + qname);
+        }
+        barcode = qname.substr(qname.size() - opt.tail_length);
     } else {
         throw std::runtime_error("Unsupported mode: " + opt.mode);
     }
@@ -73,12 +80,11 @@ static void usage(const char* argv0) {
     std::cerr
         << "Usage: " << argv0 << " [options] < input.sam > output.sam\n"
         << "Options:\n"
-        << "  --sample STR       Sample/RG ID to add as RG:Z tag [sample]\n"
-        << "  --mode STR         Barcode extraction mode: regex, colon, underscore, auto [regex]\n"
+        << "  --mode STR         Barcode extraction mode: regex, colon, underscore, auto, tail [regex]\n"
         << "  --regex STR        Regex used in regex mode; first capture group is barcode\n"
         << "  --colon-field INT  1-based colon-delimited field used in colon mode [5]\n"
-        << "  --index STR        Optional suffix appended to barcode as -STR\n"
-        << "  --no-add-rg        Do not add @RG header or RG:Z alignment tag\n";
+        << "  --tail-length INT  Number of characters to take from the end in tail mode [0]\n"
+        << "  --index STR        Optional suffix appended to barcode as -STR\n";
 }
 
 static Options parse_args(int argc, char** argv) {
@@ -92,18 +98,16 @@ static Options parse_args(int argc, char** argv) {
             return argv[++i];
         };
 
-        if (arg == "--sample") {
-            opt.sample = need_value(arg);
-        } else if (arg == "--mode") {
+        if (arg == "--mode") {
             opt.mode = need_value(arg);
         } else if (arg == "--regex") {
             opt.pattern = need_value(arg);
         } else if (arg == "--colon-field") {
             opt.colon_field = std::stoi(need_value(arg));
+        } else if (arg == "--tail-length") {
+            opt.tail_length = std::stoi(need_value(arg));
         } else if (arg == "--index") {
             opt.index_suffix = need_value(arg);
-        } else if (arg == "--no-add-rg") {
-            opt.add_rg = false;
         } else if (arg == "-h" || arg == "--help") {
             usage(argv[0]);
             std::exit(0);
@@ -118,17 +122,11 @@ int main(int argc, char** argv) {
     try {
         const Options opt = parse_args(argc, argv);
         std::string line;
-        bool rg_header_written = false;
 
         while (std::getline(std::cin, line)) {
             if (starts_with(line, "@")) {
                 std::cout << line << '\n';
                 continue;
-            }
-
-            if (opt.add_rg && !rg_header_written) {
-                std::cout << "@RG\tID:" << opt.sample << "\tSM:" << opt.sample << "\tPL:ILLUMINA\n";
-                rg_header_written = true;
             }
 
             auto fields = split(line, '\t');
@@ -142,15 +140,12 @@ int main(int argc, char** argv) {
             for (size_t i = 11; i < fields.size(); ++i) {
                 if (!starts_with(fields[i], "CB:Z:") &&
                     !starts_with(fields[i], "CR:Z:") &&
-                    !(opt.add_rg && starts_with(fields[i], "RG:Z:"))) {
+                    !starts_with(fields[i], "RG:Z:")) {
                     out_fields.push_back(fields[i]);
                 }
             }
             out_fields.push_back("CB:Z:" + barcode);
             out_fields.push_back("CR:Z:" + barcode);
-            if (opt.add_rg) {
-                out_fields.push_back("RG:Z:" + opt.sample);
-            }
 
             for (size_t i = 0; i < out_fields.size(); ++i) {
                 if (i) {

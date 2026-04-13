@@ -5,7 +5,7 @@ This workflow identifies doublets from aligned single-cell CUT&Tag / ATAC-like B
 The pipeline performs these steps:
 
 - indexes the reference FASTA with `samtools faidx`
-- adds `CB`, `CR`, and `RG` tags to each BAM using a compiled C++ SAM stream filter
+- adds `CB` and `CR` tags to each BAM using a compiled C++ SAM stream filter while removing any `RG` tag
 - removes PCR duplicates per BAM with `samtools fixmate` and barcode-aware `samtools markdup --barcode-tag CB`
 - merges deduplicated BAMs into `merged.sorted.bam`
 - runs `souporcell_pipeline.py` with `--no_umi`, `--skip_remap`, and `--ignore` enabled by default
@@ -18,7 +18,7 @@ Default barcode extraction uses a regex against each read name:
 ([ACGTN]+(?:-[0-9]+)?)$
 ```
 
-If read names encode barcodes differently, use `--extract_mode colon`, `--extract_mode underscore`, `--extract_mode auto`, or override `--qname_regex`. For read names like `2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11`, use `--extract_mode auto` or `--extract_mode colon --colon_field 6`; `--colon_field 5` would extract `1543`, not the barcode suffix.
+If read names encode barcodes differently, use `--extract_mode colon`, `--extract_mode underscore`, `--extract_mode auto`, `--extract_mode tail`, or override `--qname_regex`. For read names like `2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11`, use `--extract_mode auto` or `--extract_mode colon --colon_field 6`; `--colon_field 5` would extract `1543`, not the barcode suffix. For read names like `533657448:1:10102:0430:0056_AGACCAGC_AGAGATCT_G12-15`, `--extract_mode tail --tail_length 26` captures `AGACCAGC_AGAGATCT_G12-15`.
 
 For sparse CUT&Tag / ATAC-like data, the default Souporcell thresholds `--min_alt 10 --min_ref 10` may be too strict. The workflow exposes these as `--min_alt` and `--min_ref`.
 
