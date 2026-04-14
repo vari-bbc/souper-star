@@ -5,7 +5,7 @@ This repository contains a Nextflow pipeline for Souporcell-based doublet callin
 The pipeline covers:
 
 - FASTA indexing with `samtools faidx`
-- `CB`/`CR` cell barcode tag insertion using a C++ stream filter
+- `CB`/`CR` cell barcode tag insertion using a C++ stream filter (maybe CR is not needed, TODO: update in the future)
 - barcode-aware PCR duplicate removal with `samtools markdup --barcode-tag CB`
 - BAM merging, sorting, and indexing
 - Souporcell doublet calling
@@ -175,6 +175,19 @@ Build the C++ tagger manually if desired:
 
 ## Notes
 
-- The barcode list must match the `CB` tags generated from the BAM read names.
-- If Souporcell reports many missing barcodes, rerun with a different `--extract_mode` or `--qname_regex`.
-- This workflow uses `--no_umi true`, `--skip_remap true`, and `--ignore true` by default for aligned CUT&Tag / ATAC-like BAMs.
+The barcode list must match the `CB` tags generated from the BAM read names.
+
+Default barcode extraction uses a regex against each read name (TODO: make default using tail length instead)
+```text
+([ACGTN]+(?:-[0-9]+)?)$
+```
+
+If read names encode barcodes differently, use `--extract_mode colon`, `--extract_mode underscore`, `--extract_mode auto`, `--extract_mode tail`, or override `--qname_regex`. For read names like `2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11`, use `--extract_mode auto` or `--extract_mode colon --colon_field 6`; `--colon_field 5` would extract `1543`, not the barcode suffix. For read names like `533657448:1:10102:0430:0056_AGACCAGC_AGAGATCT_G12-15`, `--extract_mode tail --tail_length 26` captures `AGACCAGC_AGAGATCT_G12-15`.
+
+For sparse CUT&Tag data, the default Souporcell thresholds `--min_alt 10 --min_ref 10` may be too strict. The workflow exposes these as `--min_alt` and `--min_ref`.
+
+If Souporcell clustering completes but `troublet` fails during doublet detection, `--allow_troublet_failure true` can be used to keep `clusters_tmp.tsv` as a clustering-only `clusters.tsv`. This fallback does not provide reliable doublet status calls.
+
+If `clusters.tsv` exists but Souporcell exits nonzero in a later consensus or ambient-RNA stage, `--allow_souporcell_partial true` can be used to accept `clusters.tsv` as the final result while marking the output with `souporcell.partial.allowed`.
+
+`RUN_SOUPORCELL` removes an existing `souporcell_output` directory by default so retries start from a clean state and Nextflow controls resume semantics. Set `--clean_souporcell_output false` only when you intentionally want Souporcell's internal partial-output restart behavior.
