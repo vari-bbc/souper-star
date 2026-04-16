@@ -47,6 +47,25 @@ nextflow run main.nf \
   -profile conda,slurm
 ```
 
+To keep CPU and memory settings out of the command line, place them in a separate config file and pass it with `-c`:
+
+```bash
+nextflow run main.nf \
+  -c conf/hpc_resources.config \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda,slurm
+```
+
+Example resource overrides are provided in:
+
+```bash
+conf/hpc_resources.config
+```
+
 If you are not using the Nextflow Conda profile and already have a named Conda environment, run Souporcell exactly like the original shell workflow:
 
 ```bash
@@ -57,6 +76,30 @@ Use a non-default BAM filename pattern with:
 
 ```bash
 --bam_glob "*.bam"
+```
+
+Set process CPU counts explicitly to match your allocation:
+
+```bash
+--fasta_cpus 1 \
+--tag_cpus 2 \
+--dedup_cpus 2 \
+--merge_cpus 2 \
+--souporcell_cpus 2
+```
+
+For pipelined `samtools` steps such as barcode tagging and deduplication, these values are the
+total CPUs requested for the Slurm job. The pipeline now splits `samtools` threads across
+concurrent stages so one process does not oversubscribe its CPU allocation.
+
+Set process memory explicitly to match your allocation:
+
+```bash
+--fasta_memory '4 GB' \
+--tag_memory '8 GB' \
+--dedup_memory '16 GB' \
+--merge_memory '16 GB' \
+--souporcell_memory '16 GB'
 ```
 
 ## Barcode Extraction

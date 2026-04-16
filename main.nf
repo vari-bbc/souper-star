@@ -6,6 +6,16 @@ params.out_dir = params.out_dir ?: 'souporcell_work'
 params.barcode_list = params.barcode_list ?: null
 params.ref_fasta = params.ref_fasta ?: null
 params.k_genotypes = params.k_genotypes ?: 4
+params.fasta_cpus = params.fasta_cpus ?: 2
+params.tag_cpus = params.tag_cpus ?: 4
+params.dedup_cpus = params.dedup_cpus ?: 4
+params.merge_cpus = params.merge_cpus ?: 4
+params.souporcell_cpus = params.souporcell_cpus ?: 4
+params.fasta_memory = params.fasta_memory ?: '8 GB'
+params.tag_memory = params.tag_memory ?: '8 GB'
+params.dedup_memory = params.dedup_memory ?: '24 GB'
+params.merge_memory = params.merge_memory ?: '24 GB'
+params.souporcell_memory = params.souporcell_memory ?: '24 GB'
 params.extract_mode = params.extract_mode ?: 'regex'
 params.qname_regex = params.qname_regex ?: '([ACGTN]+(?:-[0-9]+)?)$'
 params.colon_field = params.colon_field ?: 5
@@ -40,8 +50,8 @@ if (!params.ref_fasta) {
 
 process PREPARE_FASTA {
     tag "${ref_fasta}"
-    cpus 4
-    memory '16 GB'
+    cpus params.fasta_cpus
+    memory params.fasta_memory
     publishDir "${params.out_dir}/ref", mode: params.publish_mode
 
     input:
@@ -58,8 +68,8 @@ process PREPARE_FASTA {
 
 process ADD_CB_RG_TAGS {
     tag "${sample}"
-    cpus 8
-    memory '32 GB'
+    cpus params.tag_cpus
+    memory params.tag_memory
     publishDir "${params.out_dir}/tagged_bams", mode: params.publish_mode
 
     input:
@@ -71,21 +81,21 @@ process ADD_CB_RG_TAGS {
     script:
     def index_arg = params.index_suffix ? "--index \"${params.index_suffix}\"" : ''
     """
-    samtools view -h -@ ${task.cpus} "${bam}" \\
+    samtools view -h -@ 1 "${bam}" \\
       | add_cb_rg_tags \\
           --mode "${params.extract_mode}" \\
           --regex '${params.qname_regex}' \\
           --colon-field ${params.colon_field} \\
           --tail-length ${params.tail_length} \\
           ${index_arg} \\
-      | samtools view -b -@ ${task.cpus} -o "${sample}.rg.bam" -
+      | samtools view -b -@ 1 -o "${sample}.rg.bam" -
     """
 }
 
 process DEDUP_BAM {
     tag "${sample}"
-    cpus 16
-    memory '96 GB'
+    cpus params.dedup_cpus
+    memory params.dedup_memory
     publishDir "${params.out_dir}/dedup_bams", mode: params.publish_mode
 
     input:
@@ -95,21 +105,29 @@ process DEDUP_BAM {
     tuple val(sample), path("${sample}.dedup.bam"), path("${sample}.dup.out"), emit: dedup_bam
 
     script:
+    // The samtools stages run concurrently in one pipe, so split threads across them.
+    def dedup_threads = [
+        (int) Math.floor(task.cpus / 4),
+        (int) Math.floor(task.cpus / 4),
+        (int) Math.floor(task.cpus / 4),
+        (int) Math.floor(task.cpus / 4)
+    ]
+    (0..<(task.cpus % 4)).each { idx -> dedup_threads[idx] = dedup_threads[idx] + 1 }
     """
-    samtools sort -n -m 4G -@ ${task.cpus} "${rg_bam}" \\
-      | samtools fixmate -m -@ ${task.cpus} - - \\
-      | samtools sort -m 2G -@ ${task.cpus} - \\
+    samtools sort -n -m 4G -@ ${dedup_threads[0]} "${rg_bam}" \\
+      | samtools fixmate -m -@ ${dedup_threads[1]} - - \\
+      | samtools sort -m 2G -@ ${dedup_threads[2]} - \\
       | samtools markdup -r -s \\
           -f "${sample}.dup.out" \\
           --barcode-tag CB \\
-          -@ ${task.cpus} \\
+          -@ ${dedup_threads[3]} \\
           - "${sample}.dedup.bam"
     """
 }
 
 process MERGE_BAMS {
-    cpus 16
-    memory '96 GB'
+    cpus params.merge_cpus
+    memory params.merge_memory
     publishDir "${params.out_dir}/merged_bam", mode: params.publish_mode
 
     input:
@@ -127,8 +145,8 @@ process MERGE_BAMS {
 }
 
 process RUN_SOUPORCELL {
-    cpus 16
-    memory '128 GB'
+    cpus params.souporcell_cpus
+    memory params.souporcell_memory
     time '24h'
     publishDir "${params.out_dir}", mode: params.publish_mode
     errorStrategy 'ignore'
