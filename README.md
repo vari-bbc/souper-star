@@ -10,8 +10,6 @@ The pipeline covers:
 - BAM merging, sorting, and indexing
 - Souporcell doublet calling
 
-To run the pipeline, it needs to provide a plain-text barcode file with one bare barcode per line, for example:
-
 ## Files
 
 - `main.nf`: Nextflow DSL2 workflow.
