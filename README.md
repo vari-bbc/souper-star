@@ -1,147 +1,234 @@
-# souper-star
-Nextflow workflow running souporcell on barcoded cell subsets
+# Souporcell Doublet Calling Pipeline
 
-## Workflow
+This repository contains a Nextflow pipeline for Souporcell-based doublet calling from aligned single-cell coCUT&Tag BAM files.
 
-The analysis workflow performs the following steps:
+The pipeline covers:
 
-  1. Convert SAM to BAM (if necessary)
-  2. Remove duplicate reads
-  3. Add unique tags for each input file
-  4. Filter cells by a minimum read threshold (if specified)
-  5. Extract the barcodes observed in each filtered set of alignments
-  6. Merge alignments by sample
-  7. Create BED files for each sample
-  8. Run souporcell to classify each cell by genotype
-  9. Summarize outputs with ArchR
+- FASTA indexing with `samtools faidx`
+- `CB`/`CR` cell barcode tag insertion using a C++ stream filter (maybe CR is not needed, TODO: update in the future)
+- barcode-aware PCR duplicate removal with `samtools markdup --barcode-tag CB`
+- BAM merging, sorting, and indexing
+- Souporcell doublet calling
 
-## Input Data
+## Files
 
-To run souper-star, the user must provide a set of aligned reads in BAM (or SAM) format
-as well as the nucleotide sequence of the reference genome in FASTA format.
-While alignments in SAM format are supported, the following documentation will
-refer to BAM when indicating a file which could be provided as either BAM or SAM.
-Multiple BAM files from the same sample can be provided using a sample sheet
-CSV to indicate which BAM files correspond to which sample.
+- `main.nf`: Nextflow DSL2 workflow.
+- `nextflow.config`: local, Conda, Singularity, and SLURM profile settings.
+- `bin/add_cb_rg_tags`: wrapper that prefers the compiled tagger and builds it if needed.
+- `src/add_cb_rg_tags.cpp`: fast C++ SAM stream filter that adds `CB:Z` and `CR:Z` tags while removing any existing `RG` tag.
+- `tools/build_add_cb_rg_tags.sh`: explicit build helper for the C++ tagger.
+- `envs/souporcell.yml`: Conda environment definition.
+- `containers/souporcell.def`: Singularity/Apptainer definition file.
+- `METHODS.md`: extended workflow notes.
 
-### Sample Sheet
-
-The sample sheet listing the location of all input files must have a column
-listing the path to each BAM file as well as a column indicating the sample
-for that BAM.
-
-Example:
+## Minimal Run
 
 ```bash
-sample,path
-SampleA,/path/to/batch1/SampleA.bam
-SampleA,/path/to/batch2/SampleA.bam
-SampleB,/path/to/batch1/SampleB.bam
-SampleB,/path/to/batch2/SampleB.bam
+nextflow run main.nf \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda
 ```
 
-## Running the Workflow
+For SLURM with Conda:
 
-### Nextflow
+```bash
+nextflow run main.nf \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda,slurm
+```
 
-The workflow can be run using the Nextflow workflow management system, which can be
-set up following [their user documentation](https://nextflow.io/).
+To keep CPU and memory settings out of the command line, place them in a separate config file and pass it with `-c`:
 
-### Containers
+```bash
+nextflow run main.nf \
+  -c conf/hpc_resources.config \
+  --input_dir /path/to/bam_files \
+  --barcode_list ./tmp/cell_barcode.tsv \
+  --ref_fasta ../../data/ref_genome/hg38_gencode.fa \
+  --k_genotypes 4 \
+  --out_dir souporcell_work \
+  -profile conda,slurm
+```
 
-The software used in each step of the workflow has been provided via Docker containers
-which are specified in the workflow.
-Those software containers can be used either via Docker ([installation instructions](https://docs.docker.com/get-docker/))
-or Singularity ([installation instructions](https://docs.sylabs.io/guides/latest/user-guide/)).
-Singularity is typically used on HPC systems which do not allow users the root
-access needed for running Docker.
+Example resource overrides are provided in:
 
-After either Docker or Singularity, Nextflow must be configured to use either
-system as appropriate.
-The most convenient way to set up this configuration is to create a file called
-`nextflow.config` which follows [the configuration instructions for Nextflow](https://www.nextflow.io/docs/latest/config.html).
-It is also possible to set up other types of job execution systems (e.g. AWS,
-Google Cloud, Azure, SLURM, PBS) which can be managed directly by Nextflow.
-This configuration file can be used across multiple runs of the workflow on
-the same computational system.
+```bash
+conf/hpc_resources.config
+```
 
-### Parameters
+If you are not using the Nextflow Conda profile and already have a named Conda environment, run Souporcell exactly like the original shell workflow:
 
-For each individual run, a file with the parameters for each run should be
-created [in JSON format](https://www.w3schools.com/js/js_json_intro.asp),
-typically called `params.json`.
-The required parameters for the workflow are:
+```bash
+--souporcell_cmd 'conda run -n souporcell souporcell_pipeline.py'
+```
 
- - `samplesheet`: Path to the sample sheet CSV [described above](#sample-sheet)
- - `genome_fasta`: Path to the genome FASTA used for alignment
- - `k`: Number of genotypes used
- - `min_reads`: Minimum threshold of reads per barcode (cell)
+Use a non-default BAM filename pattern with:
 
- ### Launching the Workflow
+```bash
+--bam_glob "*.bam"
+```
 
- Once all of the previous steps have been completed, the workflow can be
- launched with a command like:
+Set process CPU counts explicitly to match your allocation:
 
- ```bash
- nextflow run FredHutch/souper-star -params-file params.json -c nextflow.config
- ```
+```bash
+--fasta_cpus 1 \
+--tag_cpus 2 \
+--dedup_cpus 2 \
+--merge_cpus 2 \
+--souporcell_cpus 2
+```
 
- ## Quickstart (with the BASH Workbench)
+For pipelined `samtools` steps such as barcode tagging and deduplication, these values are the
+total CPUs requested for the Slurm job. The pipeline now splits `samtools` threads across
+concurrent stages so one process does not oversubscribe its CPU allocation.
 
- To more easily set up and launch the workflow, users may take advantage of
- a command-line utility called the [BASH Workbench](https://github.com/FredHutch/bash-workbench/wiki).
- This utility can be installed directly with the command `pip3 install bash-workbench`.
- After installation, the BASH Workbench can be launched interactively with the command
- `wb`.
- 
- > Users of the Fred Hutch computing cluster can launch the workbench directly
- > via `wb` without the need for any installation.
+Set process memory explicitly to match your allocation:
 
- ### Setup
+```bash
+--fasta_memory '4 GB' \
+--tag_memory '8 GB' \
+--dedup_memory '16 GB' \
+--merge_memory '16 GB' \
+--souporcell_memory '16 GB'
+```
 
- To set up this workflow in the BASH Workbench, select:
- 
- - Select `Manage Repositories`;
- - Select `Download New Repository`;
- - then enter `FredHutch/souper-star` and confirm
+## Barcode Extraction
 
- After setting up the workflow, the workbench can be exited with Control+C.
+The C++ tagger reads SAM from `stdin`, writes SAM to `stdout`, removes any existing `RG` tag, and extracts a barcode from each read name.
 
- ### Launching the Workflow
+Default mode:
 
- After setting up the workflow, it can be run by:
+```bash
+--extract_mode regex --qname_regex '([ACGTN]+(?:-[0-9]+)?)$'
+```
 
- - Navigating to the folder intended for the output files;
- - Launching the BASH Workbench (`wb`);
- - Select `Run Tool`;
- - Select `FredHutch_souper-star`;
- - Select `souper-star`;
- - Enter [the appropriate parameters](#parameters);
- - Select `Review and Run`;
- - Select `FredHutch_souper-star`;
- - Select `slurm` (if using an HPC SLURM cluster) or `docker` (for local execution);
- - Enter any needed parameters for the SLURM or Docker configuration. For example, SLURM users will need to enter the `scratch_dir` parameter using a folder on the scratch filesystem which can be used for temporary files;
- - Select `Review and Run`;
- - Select `Run Now`
+Useful alternatives:
 
- Once the workflow has been launched, a record will be saved of the parameters
- used for execution, as well as all of the logs which were produced during
- execution.
+```bash
+# Use the last colon-delimited field if present, otherwise substring before underscore.
+# For read names like:
+# 2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11
+# this extracts TAGGCATG_ATCCAGGA_G11.
+--extract_mode auto
 
- ## Output Files
+# Use a specific colon-delimited field. The field number is 1-based.
+# For the read-name example above, the barcode is field 6.
+--extract_mode colon --colon_field 6
 
- The output files produced by the workflow include:
+# Use the last N characters of the read name.
+# Example:
+# 533657448:1:10102:0430:0056_AGACCAGC_AGAGATCT_G12-15
+# barcode = AGACCAGC_AGAGATCT_G12-15
+--extract_mode tail --tail_length 26
 
- ```bash
- beds/                           # Alignments in BED format for each sample
- dedup/                          # Deduplication log files for each sample
- sample_manifest.csv             # Table indicating the index used for each sample
- souporcell/                     # Results from souporcell
- souporcell.clusters.all.csv.gz  # Table listing soupercell assignments for each cell
- souporcell.clusters.all.pdf     # Summary figures with QC metrics
- ```
+# Use the substring before the first underscore.
+--extract_mode underscore
+```
 
-## Authors
+If you use `--colon_field 5` for the example above, the generated tag will be `CB:Z:1543`, which is the fifth read-name field, not the barcode suffix. The barcode list supplied to Souporcell must match the generated `CB` tags.
 
-Analysis code was written by Jacob Greene (jgreene3 at fredhutch dot org).
-Workflow code was written by Samuel Minot (sminot at fredhutch dot org).
+If you change `--extract_mode` or `--colon_field`, do not reuse an old cached `ADD_CB_RG_TAGS` result. Either run without `-resume`, use a fresh `work/` directory, or delete the old downstream output before rechecking tags.
+
+Quick check:
+
+```bash
+samtools view results/merged_bam/merged.sorted.bam | awk '{for (i=12;i<=NF;i++) if ($i ~ /^CB:Z:/) {sub(/^CB:Z:/,"",$i); print $i; break}}' | head
+head ./data/cell_barcode.tsv
+```
+
+If the barcode should be suffixed, for example `AAAC...-1`, add:
+
+```bash
+--index_suffix 1
+```
+
+If BAMs already have correct `CB` tags, skip tag insertion:
+
+```bash
+--skip_add_tags true
+```
+
+## Sparse CUT&Tag / ATAC Runs
+
+For sparse test data or low-depth CUT&Tag / ATAC-like data, Souporcell's default locus thresholds can be too strict. Try lower thresholds:
+
+```bash
+--min_alt 2 --min_ref 2
+```
+
+If Souporcell finishes clustering but `troublet` fails during doublet detection, rerun with:
+
+```bash
+--allow_troublet_failure true
+```
+
+This keeps `souporcell_output/clusters_tmp.tsv` as `souporcell_output/clusters.tsv` and writes `souporcell_output/troublet.failed.allowed`. Use this only as a clustering-only fallback; it does not produce validated doublet calls.
+
+If Souporcell writes `souporcell_output/clusters.tsv` but exits nonzero during a later consensus or ambient-RNA step, accept that partial output with:
+
+```bash
+--allow_souporcell_partial true
+```
+
+This writes `souporcell_output/souporcell.partial.allowed`. Use this only when `clusters.tsv` is the output you need and you accept that later files such as `ambient_rna.txt` or `cluster_genotypes.vcf` may be incomplete or missing.
+
+By default, each `RUN_SOUPORCELL` task removes any pre-existing `souporcell_output` directory inside the Nextflow work directory before starting. This avoids Souporcell's own partial-output restart mode producing different behavior from Nextflow `-resume`. To preserve Souporcell's internal restart behavior instead:
+
+```bash
+--clean_souporcell_output false
+```
+
+## Outputs
+
+Outputs are published under `--out_dir`:
+
+- `bin/add_cb_rg_tags`: compiled C++ tagger.
+- `ref/`: FASTA index generated by `samtools faidx`.
+- `tagged_bams/*.rg.bam`: BAMs with `CB` and `CR` tags and without `RG` tags.
+- `dedup_bams/*.dedup.bam`: barcode-aware duplicate-removed BAMs.
+- `dedup_bams/*.dup.out`: `samtools markdup` duplicate metrics.
+- `merged_bam/merged.sorted.bam`: merged, sorted BAM.
+- `merged_bam/merged.sorted.bam.bai`: BAM index.
+- `souporcell_output/`: Souporcell results, including `clusters.tsv`.
+
+## Dependencies
+
+Use `-profile conda` or provide these tools on `PATH`:
+
+- Nextflow
+- `g++` with C++17 support
+- `samtools`
+- `souporcell_pipeline.py`
+
+Build the C++ tagger manually if desired:
+
+```bash
+./tools/build_add_cb_rg_tags.sh
+```
+
+## Notes
+
+The barcode list must match the `CB` tags generated from the BAM read names.
+
+Default barcode extraction uses a regex against each read name (TODO: make default using tail length instead)
+```text
+([ACGTN]+(?:-[0-9]+)?)$
+```
+
+If read names encode barcodes differently, use `--extract_mode colon`, `--extract_mode underscore`, `--extract_mode auto`, `--extract_mode tail`, or override `--qname_regex`. For read names like `2501692422:2:11703:1814:1543:TAGGCATG_ATCCAGGA_G11`, use `--extract_mode auto` or `--extract_mode colon --colon_field 6`; `--colon_field 5` would extract `1543`, not the barcode suffix. For read names like `533657448:1:10102:0430:0056_AGACCAGC_AGAGATCT_G12-15`, `--extract_mode tail --tail_length 26` captures `AGACCAGC_AGAGATCT_G12-15`.
+
+For sparse CUT&Tag data, the default Souporcell thresholds `--min_alt 10 --min_ref 10` may be too strict. The workflow exposes these as `--min_alt` and `--min_ref`.
+
+If Souporcell clustering completes but `troublet` fails during doublet detection, `--allow_troublet_failure true` can be used to keep `clusters_tmp.tsv` as a clustering-only `clusters.tsv`. This fallback does not provide reliable doublet status calls.
+
+If `clusters.tsv` exists but Souporcell exits nonzero in a later consensus or ambient-RNA stage, `--allow_souporcell_partial true` can be used to accept `clusters.tsv` as the final result while marking the output with `souporcell.partial.allowed`.
+
+`RUN_SOUPORCELL` removes an existing `souporcell_output` directory by default so retries start from a clean state and Nextflow controls resume semantics. Set `--clean_souporcell_output false` only when you intentionally want Souporcell's internal partial-output restart behavior.
